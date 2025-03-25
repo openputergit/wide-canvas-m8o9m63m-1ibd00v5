@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UAE Smart Parking</title>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@geoapify/geocoder-autocomplete@^1/dist/index.min.js"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;700&display=swap">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background-color: #f0f0f0;
+        }
+        .neu-brutal {
+            background: white;
+            border: 3px solid black;
+            box-shadow: 5px 5px 0px black;
+            transition: all 0.2s ease;
+        }
+        .neu-brutal:hover {
+            transform: translate(-2px, -2px);
+            box-shadow: 7px 7px 0px black;
+        }
+        .neu-brutal:active {
+            transform: translate(2px, 2px);
+            box-shadow: 3px 3px 0px black;
+        }
+        #map {
+            height: 300px;
+            width: 100%;
+            border: 3px solid black;
+        }
+        .loading {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4">
+    <div class="loading">
+        <div class="animate-spin rounded-full h-32 w-32 border-t-4 border-b-4 border-black"></div>
+    </div>
+
+    <div class="max-w-md mx-auto space-y-6">
+        <div class="neu-brutal p-6">
+            <h1 class="text-3xl font-bold mb-4">UAE Smart Parking</h1>
+            <form id="parkingForm" class="space-y-4">
+                <div>
+                    <label class="block mb-2 font-bold">Vehicle Plate Number</label>
+                    <input type="text" id="plateNumber" class="w-full p-2 neu-brutal" required>
+                </div>
+                <div>
+                    <label class="block mb-2 font-bold">Current Location</label>
+                    <div id="map"></div>
+                </div>
+                <div>
+                    <label class="block mb-2 font-bold">Zone Number</label>
+                    <input type="text" id="zoneNumber" class="w-full p-2 neu-brutal" readonly>
+                </div>
+                <div>
+                    <label class="block mb-2 font-bold">Parking Duration (hours)</label>
+                    <input type="number" id="duration" class="w-full p-2 neu-brutal" value="1" min="1" max="24">
+                </div>
+                <button type="submit" class="w-full p-3 neu-brutal bg-yellow-300 font-bold">
+                    Start Auto-Parking
+                </button>
+            </form>
+        </div>
+
+        <div id="activeParking" class="neu-brutal p-6 hidden">
+            <h2 class="text-2xl font-bold mb-4">Active Parking Session</h2>
+            <div class="space-y-2">
+                <p>Plate Number: <span id="activePlate"></span></p>
+                <p>Zone: <span id="activeZone"></span></p>
+                <p>Time Remaining: <span id="timeRemaining"></span></p>
+                <button id="stopParking" class="w-full p-3 neu-brutal bg-red-300 font-bold mt-4">
+                    Stop Parking
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let map, marker, watchId, parkingInterval;
+        const parkingZones = {
+            // Example parking zones data
+            'A': { price: 2, coordinates: [25.2048, 55.2708] },
+            'B': { price: 3, coordinates: [25.1972, 55.2744] }
+        };
+
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([25.2048, 55.2708], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        }
+
+        // Start watching location
+        function startWatchingLocation() {
+            if ("geolocation" in navigator) {
+                watchId = navigator.geolocation.watchPosition(
+                    position => {
+                        const { latitude, longitude } = position.coords;
+                        if (!marker) {
+                            marker = L.marker([latitude, longitude]).addTo(map);
+                        } else {
+                            marker.setLatLng([latitude, longitude]);
+                        }
+                        map.setView([latitude, longitude]);
+                        checkParkingZone(latitude, longitude);
+                    },
+                    error => console.error("Error getting location:", error),
+                    { enableHighAccuracy: true }
+                );
+            }
+        }
+
+        // Check if user is in parking zone
+        function checkParkingZone(lat, lng) {
+            // Simple distance-based check (replace with actual zone data)
+            for (const [zone, data] of Object.entries(parkingZones)) {
+                const distance = turf.distance(
+                    turf.point([lng, lat]),
+                    turf.point([data.coordinates[1], data.coordinates[0]]),
+                    { units: 'kilometers' }
+                );
+                if (distance < 0.1) { // Within 100 meters
+                    document.getElementById('zoneNumber').value = zone;
+                    return;
+                }
+            }
+            document.getElementById('zoneNumber').value = '';
+        }
+
+        // Handle parking submission
+        document.getElementById('parkingForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const plateNumber = document.getElementById('plateNumber').value;
+            const zoneNumber = document.getElementById('zoneNumber').value;
+            const duration = document.getElementById('duration').value;
+
+            if (!zoneNumber) {
+                Swal.fire('Error', 'You must be in a valid parking zone', 'error');
+                return;
+            }
+
+            // Start parking session
+            document.getElementById('activePlate').textContent = plateNumber;
+            document.getElementById('activeZone').textContent = zoneNumber;
+            document.getElementById('parkingForm').parentElement.classList.add('hidden');
+            document.getElementById('activeParking').classList.remove('hidden');
+
+            // Simulate SMS sending
+            Swal.fire('Success', 'Parking SMS sent successfully!', 'success');
+
+            // Start countdown
+            let timeLeft = duration * 3600;
+            parkingInterval = setInterval(() => {
+                timeLeft--;
+                const hours = Math.floor(timeLeft / 3600);
+                const minutes = Math.floor((timeLeft % 3600) / 60);
+                const seconds = timeLeft % 60;
+                document.getElementById('timeRemaining').textContent = 
+                    `${hours}h ${minutes}m ${seconds}s`;
+
+                if (timeLeft <= 300) { // 5 minutes warning
+                    Swal.fire('Warning', 'Parking session ending soon!', 'warning');
+                }
+                if (timeLeft <= 0) {
+                    clearInterval(parkingInterval);
+                    Swal.fire('Info', 'Parking session ended', 'info');
+                }
+            }, 1000);
+        });
+
+        // Handle stop parking
+        document.getElementById('stopParking').addEventListener('click', () => {
+            clearInterval(parkingInterval);
+            document.getElementById('parkingForm').parentElement.classList.remove('hidden');
+            document.getElementById('activeParking').classList.add('hidden');
+            document.getElementById('parkingForm').reset();
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            startWatchingLocation();
+        });
+    </script>
+<script>document.body.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); return }, { passive: false })</script>
+	</body>
+</html>
